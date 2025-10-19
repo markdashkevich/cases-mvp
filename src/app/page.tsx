@@ -6,17 +6,29 @@ export default function Home() {
   const [error, setError] = useState('');
 
   async function testOpen() {
-    setMsg('');
-    setError('');
-    try {
-      const res = await fetch('/api/open_case'); // GET к нашему серверному файлу
-      const data = await res.json();
-      if (!data.ok) throw new Error(data.error ?? 'Ошибка');
-      setMsg(data.msg ?? 'ok'); // у нас вернётся "API is alive"
-    } catch (e: any) {
-      setError(e.message || 'Не получилось обратиться к API');
-    }
+  setMsg('');
+  setError('');
+  try {
+    const tg = (window as any).Telegram?.WebApp;
+    const initData = tg?.initData || ''; // в Телеге тут будут данные пользователя
+
+    const res = await fetch('/api/open_case', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-init-data': initData, // передаём на сервер
+      },
+      body: JSON.stringify({}), // тело нам не нужно, всё в заголовке
+    });
+
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error ?? 'Ошибка');
+    setMsg(data.prize?.title ?? 'ok');
+  } catch (e: any) {
+    setError(e.message || 'Не получилось обратиться к API');
   }
+}
+
 
   return (
     <main style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', gap: 16 }}>
