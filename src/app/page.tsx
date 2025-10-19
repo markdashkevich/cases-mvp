@@ -10,20 +10,20 @@ export default function Home() {
   setError('');
   try {
     const tg = (window as any).Telegram?.WebApp;
-    const initData = tg?.initData || ''; // в Телеге тут будут данные пользователя
+    const initData = tg?.initData || '';
 
-    const res = await fetch('/api/open_case', {
+    const res = await fetch('/api/open_case2', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-init-data': initData, // передаём на сервер
+        'x-init-data': initData, // шлём initData в заголовке
       },
-      body: JSON.stringify({}), // тело нам не нужно, всё в заголовке
+      body: JSON.stringify({}), // тело не нужно
     });
 
     const data = await res.json();
     if (!data.ok) throw new Error(data.error ?? 'Ошибка');
-    setMsg(data.prize?.title ?? 'ok');
+    setMsg(`${data.prize?.title} (user: ${data.userId || 'guest'})`);
   } catch (e: any) {
     setError(e.message || 'Не получилось обратиться к API');
   }
