@@ -1,9 +1,27 @@
 'use client';
-import { useState, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 
 export default function Home() {
   const [msg, setMsg] = useState('');
   const [error, setError] = useState('');
+  const [dbg, setDbg] = useState<{hasTg:boolean; hasInit:boolean; initLen:number; platform?:string; version?:string}>({
+    hasTg: false, hasInit: false, initLen: 0,
+  });
+
+  useEffect(() => {
+    const tg = (window as any)?.Telegram?.WebApp;
+    const initData: string = tg?.initData || '';
+    // на всякий случай
+    tg?.ready?.();
+
+    setDbg({
+      hasTg: !!tg,
+      hasInit: !!initData,
+      initLen: initData.length || 0,
+      platform: tg?.platform,
+      version: tg?.version,
+    });
+  }, []);
 
   const testOpen = useCallback(async () => {
     setMsg('');
@@ -18,13 +36,12 @@ export default function Home() {
           'Content-Type': 'application/json',
           'x-init-data': initData,
         },
-        body: JSON.stringify({}), // тело нам не важно
+        body: JSON.stringify({}),
       });
 
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       if (!data?.ok) throw new Error(data?.error ?? 'Ошибка');
-
       setMsg(`${data.prize?.title} (user: ${data.userId ?? 'guest'})`);
     } catch (e: any) {
       setError(e?.message ?? 'Не получилось обратиться к API');
@@ -52,6 +69,10 @@ export default function Home() {
 
       {msg && <div>Ответ сервера: <b>{msg}</b></div>}
       {error && <div style={{ color: 'crimson' }}>Ошибка: {error}</div>}
+
+      <div style={{ position:'fixed', bottom: 12, left: 12, fontSize: 12, opacity: 0.8 }}>
+        dbg → tg:{String(dbg.hasTg)} | init:{String(dbg.hasInit)} | len:{dbg.initLen} | {dbg.platform ?? '-'} {dbg.version ?? ''}
+      </div>
     </main>
   );
 }
