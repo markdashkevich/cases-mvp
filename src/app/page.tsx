@@ -7,18 +7,14 @@ type Dbg = {
   initLen: number;
   platform?: string;
   version?: string;
-  href?: string;
-  ua?: string;
-  ref?: string;
   scriptLoaded?: boolean;
+  href?: string;
 };
 
 export default function Home() {
   const [msg, setMsg] = useState('');
   const [error, setError] = useState('');
-  const [dbg, setDbg] = useState<Dbg>({
-    hasTg: false, hasInit: false, initLen: 0,
-  });
+  const [dbg, setDbg] = useState<Dbg>({ hasTg: false, hasInit: false, initLen: 0 });
 
   const refreshDbg = () => {
     const tg = (window as any)?.Telegram?.WebApp;
@@ -28,29 +24,27 @@ export default function Home() {
       ...d,
       hasTg: !!tg,
       hasInit: !!initData,
-      initLen: initData?.length || 0,
+      initLen: initData.length || 0,
       platform: tg?.platform,
       version: tg?.version,
       href: window.location.href,
-      ua: navigator.userAgent,
-      ref: document.referrer || '',
     }));
   };
 
-  // 1) пробуем сразу
+  // пробуем сразу
   useEffect(() => {
     refreshDbg();
   }, []);
 
-  // 2) вручную подгружаем SDK
+  // подгружаем SDK вручную (надёжно для tdesktop/ios/android)
   useEffect(() => {
     const s = document.createElement('script');
     s.src = 'https://telegram.org/js/telegram-web-app.js';
     s.async = true;
-    s.onload = () => setTimeout(() => {
+    s.onload = () => {
       setDbg(d => ({ ...d, scriptLoaded: true }));
       refreshDbg();
-    }, 0);
+    };
     document.head.appendChild(s);
     return () => { document.head.removeChild(s); };
   }, []);
@@ -61,12 +55,16 @@ export default function Home() {
     try {
       const tg = (window as any)?.Telegram?.WebApp;
       const initData: string = tg?.initData || '';
+      const platform = tg?.platform || '';
+      const version = tg?.version || '';
 
       const res = await fetch('/api/open_case', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'x-init-data': initData,
+          'x-tg-platform': platform,
+          'x-tg-version': version,
         },
         body: JSON.stringify({}),
       });
@@ -103,12 +101,11 @@ export default function Home() {
       {msg && <div>Ответ сервера: <b>{msg}</b></div>}
       {error && <div style={{ color: 'crimson' }}>Ошибка: {error}</div>}
 
-      <div style={{ position:'fixed', bottom: 12, left: 12, fontSize: 11, opacity: 0.85, maxWidth: 360, lineHeight: 1.2 }}>
+      {/* небольшой отладчик снизу — потом уберём */}
+      <div style={{ position:'fixed', bottom: 12, left: 12, fontSize: 11, opacity: 0.85, maxWidth: 380, lineHeight: 1.2 }}>
         dbg → tg:{String(dbg.hasTg)} | init:{String(dbg.hasInit)} | len:{dbg.initLen} | {dbg.platform ?? '-'} {dbg.version ?? ''}<br/>
         scriptLoaded:{String(dbg.scriptLoaded)}<br/>
-        href:{dbg.href}<br/>
-        ref:{dbg.ref}<br/>
-        ua:{dbg.ua}
+        href:{dbg.href}
       </div>
     </main>
   );
