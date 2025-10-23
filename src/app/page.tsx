@@ -1,34 +1,35 @@
 'use client';
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 
 export default function Home() {
   const [msg, setMsg] = useState('');
   const [error, setError] = useState('');
 
-  async function testOpen() {
-  setMsg('');
-  setError('');
-  try {
-    const tg = (window as any).Telegram?.WebApp;
-    const initData = tg?.initData || '';
+  const testOpen = useCallback(async () => {
+    setMsg('');
+    setError('');
+    try {
+      const tg = (window as any)?.Telegram?.WebApp;
+      const initData: string = tg?.initData || '';
 
-    const res = await fetch('/api/open_case2', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-init-data': initData, // шлём initData в заголовке
-      },
-      body: JSON.stringify({}), // тело не нужно
-    });
+      const res = await fetch('/api/open_case', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-init-data': initData,
+        },
+        body: JSON.stringify({}), // тело нам не важно
+      });
 
-    const data = await res.json();
-    if (!data.ok) throw new Error(data.error ?? 'Ошибка');
-    setMsg(`${data.prize?.title} (user: ${data.userId || 'guest'})`);
-  } catch (e: any) {
-    setError(e.message || 'Не получилось обратиться к API');
-  }
-}
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (!data?.ok) throw new Error(data?.error ?? 'Ошибка');
 
+      setMsg(`${data.prize?.title} (user: ${data.userId ?? 'guest'})`);
+    } catch (e: any) {
+      setError(e?.message ?? 'Не получилось обратиться к API');
+    }
+  }, []);
 
   return (
     <main style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', gap: 16 }}>
