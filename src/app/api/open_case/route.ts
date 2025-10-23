@@ -50,9 +50,12 @@ async function resolveUserId(req: NextRequest): Promise<string> {
 
 export async function POST(req: NextRequest) {
   const SUPABASE_URL = process.env.SUPABASE_URL!;
-  const SUPABASE_SERVICE_ROLE = process.env.SUPABASE_SERVICE_ROLE!;
+  // ⬇️ читаем именно SUPABASE_SERVICE_ROLE_KEY (как заведено в Vercel)
+  const SUPABASE_SERVICE_ROLE = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
-  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE, { auth: { persistSession: false } });
+  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE, {
+    auth: { persistSession: false },
+  });
 
   const userId = await resolveUserId(req);
   const platform = req.headers.get('x-tg-platform') || null;
@@ -62,7 +65,6 @@ export async function POST(req: NextRequest) {
   const reqId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const ua = req.headers.get('user-agent') || '';
 
-  // проверяем право на открытие (списываем 1, если есть)
   let ok = true;
   let balance: number | null = null;
 
@@ -71,7 +73,6 @@ export async function POST(req: NextRequest) {
       p_user_id: userId,
       p_req_id : reqId,
     });
-
     if (consumeErr) {
       console.error('[consume_open:error]', consumeErr);
       return NextResponse.json({ ok: false, error: 'consume_failed' }, { status: 500 });
@@ -81,7 +82,6 @@ export async function POST(req: NextRequest) {
     balance = typeof consume?.balance === 'number' ? consume.balance : null;
 
     if (!ok) {
-      // логируем попытку без права
       await supabase.from('open_logs').insert({
         ts, req_id: reqId, user_id: userId,
         prize_id: null, prize_title: null,
@@ -92,10 +92,8 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // право есть (или user == guest для лок. тестов) — выдаём приз
   const prize = pickByTickets(ITEMS);
 
-  // пишем лог в БД
   await supabase.from('open_logs').insert({
     ts, req_id: reqId, user_id: userId,
     prize_id: prize.id, prize_title: prize.title,
@@ -114,6 +112,6 @@ export async function POST(req: NextRequest) {
 }
 
 export async function GET(req: NextRequest) {
-  // для простоты разрешаем GET тем же обработчиком (но это не используется клиентом)
   return POST(req);
 }
+
