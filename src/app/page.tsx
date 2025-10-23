@@ -1,19 +1,18 @@
 'use client';
 import { useState, useEffect, useCallback } from 'react';
+import Script from 'next/script';
+
+type Dbg = { hasTg: boolean; hasInit: boolean; initLen: number; platform?: string; version?: string };
 
 export default function Home() {
   const [msg, setMsg] = useState('');
   const [error, setError] = useState('');
-  const [dbg, setDbg] = useState<{hasTg:boolean; hasInit:boolean; initLen:number; platform?:string; version?:string}>({
-    hasTg: false, hasInit: false, initLen: 0,
-  });
+  const [dbg, setDbg] = useState<Dbg>({ hasTg: false, hasInit: false, initLen: 0 });
 
-  useEffect(() => {
+  const refreshDbg = () => {
     const tg = (window as any)?.Telegram?.WebApp;
     const initData: string = tg?.initData || '';
-    // на всякий случай
     tg?.ready?.();
-
     setDbg({
       hasTg: !!tg,
       hasInit: !!initData,
@@ -21,7 +20,17 @@ export default function Home() {
       platform: tg?.platform,
       version: tg?.version,
     });
+  };
+
+  useEffect(() => {
+    // первая попытка (если скрипт уже есть)
+    refreshDbg();
   }, []);
+
+  const onTgScriptLoad = () => {
+    // повторная проверка после загрузки скрипта
+    refreshDbg();
+  };
 
   const testOpen = useCallback(async () => {
     setMsg('');
@@ -42,6 +51,7 @@ export default function Home() {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       if (!data?.ok) throw new Error(data?.error ?? 'Ошибка');
+
       setMsg(`${data.prize?.title} (user: ${data.userId ?? 'guest'})`);
     } catch (e: any) {
       setError(e?.message ?? 'Не получилось обратиться к API');
@@ -49,30 +59,38 @@ export default function Home() {
   }, []);
 
   return (
-    <main style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', gap: 16 }}>
-      <h1 style={{ margin: 0 }}>Cases MVP</h1>
+    <>
+      {/* Подключаем официальный SDK Telegram WebApp */}
+      <Script
+        src="https://telegram.org/js/telegram-web-app.js"
+        strategy="beforeInteractive"
+        onLoad={onTgScriptLoad}
+      />
+      <main style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', gap: 16 }}>
+        <h1 style={{ margin: 0 }}>Cases MVP</h1>
 
-      <button
-        onClick={testOpen}
-        style={{
-          padding: '12px 20px',
-          border: 'none',
-          borderRadius: 12,
-          background: '#4F46E5',
-          color: '#fff',
-          fontWeight: 800,
-          cursor: 'pointer',
-        }}
-      >
-        Тест: открыть API
-      </button>
+        <button
+          onClick={testOpen}
+          style={{
+            padding: '12px 20px',
+            border: 'none',
+            borderRadius: 12,
+            background: '#4F46E5',
+            color: '#fff',
+            fontWeight: 800,
+            cursor: 'pointer',
+          }}
+        >
+          Тест: открыть API
+        </button>
 
-      {msg && <div>Ответ сервера: <b>{msg}</b></div>}
-      {error && <div style={{ color: 'crimson' }}>Ошибка: {error}</div>}
+        {msg && <div>Ответ сервера: <b>{msg}</b></div>}
+        {error && <div style={{ color: 'crimson' }}>Ошибка: {error}</div>}
 
-      <div style={{ position:'fixed', bottom: 12, left: 12, fontSize: 12, opacity: 0.8 }}>
-        dbg → tg:{String(dbg.hasTg)} | init:{String(dbg.hasInit)} | len:{dbg.initLen} | {dbg.platform ?? '-'} {dbg.version ?? ''}
-      </div>
-    </main>
+        <div style={{ position:'fixed', bottom: 12, left: 12, fontSize: 12, opacity: 0.8 }}>
+          dbg → tg:{String(dbg.hasTg)} | init:{String(dbg.hasInit)} | len:{dbg.initLen} | {dbg.platform ?? '-'} {dbg.version ?? ''}
+        </div>
+      </main>
+    </>
   );
 }
