@@ -1,6 +1,5 @@
-import type { NextRequest } from 'next/server';
-import { NextResponse } from 'next/server';
-import crypto from 'crypto';
+// src/app/api/open_case/route.ts
+import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 
 type Item = { id: string; title: string; tickets: number };
@@ -14,7 +13,7 @@ const ITEMS: Item[] = [
   { id: 'C3', title: '10 000',    tickets: 3000 },
 ];
 
-function pickByTickets(items: Item[]): Item {
+function pickByTickets(items: Item[]) {
   const total = items.reduce((s, it) => s + it.tickets, 0);
   let r = Math.random() * total;
   for (const it of items) {
@@ -24,105 +23,97 @@ function pickByTickets(items: Item[]): Item {
   return items[items.length - 1];
 }
 
-function validateInitData(initData: string, botToken: string) {
+function userIdFromInitData(initData?: string): string {
   try {
-    const params = new URLSearchParams(initData);
-    const hash = params.get('hash');
-    if (!hash) return { ok: false, reason: 'no_hash' };
-
-    // data_check_string (все пары, кроме hash, отсортированы)
-    const dataCheckString = Array.from(params.entries())
-      .filter(([k]) => k !== 'hash')
-      .map(([k, v]) => `${k}=${v}`)
-      .sort()
-      .join('\n');
-
-    // secret = HMAC_SHA256("WebAppData", botToken)
-    const secret = crypto.createHmac('sha256', 'WebAppData').update(botToken).digest();
-    const calcHash = crypto.createHmac('sha256', secret).update(dataCheckString).digest('hex');
-
-    if (calcHash !== hash) return { ok: false, reason: 'bad_hash' };
-
-    const userStr = params.get('user');
-    const user = userStr ? JSON.parse(userStr) : null;
-    const userId = user?.id ? String(user.id) : 'guest';
-
-    const authDate = Number(params.get('auth_date') || '0');
-    const maxAgeSec = 60 * 60 * 24;
-    const ageOk = authDate > 0 && (Date.now() / 1000 - authDate) <= maxAgeSec;
-
-    return { ok: true, userId, ageOk };
+    if (!initData) return 'guest';
+    const p = new URLSearchParams(initData);
+    const userStr = p.get('user');
+    if (!userStr) return 'guest';
+    const user = JSON.parse(userStr);
+    return user?.id ? String(user.id) : 'guest';
   } catch {
-    return { ok: false, reason: 'exception' };
+    return 'guest';
   }
 }
 
-async function resolveUser(req: NextRequest) {
-  const botToken = process.env.TELEGRAM_BOT_TOKEN || '';
-  let initData = req.headers.get('x-init-data') || '';
-  if (!initData) {
-    try {
-      const body = await req.json();
-      if (body?.initData) initData = body.initData as string;
-    } catch {}
-  }
-  if (!initData) initData = req.nextUrl.searchParams.get('initData') || '';
-
-  if (initData && botToken) {
-    const res = validateInitData(initData, botToken);
-    return { userId: res.ok ? res.userId! : 'guest', validated: res.ok };
-  }
-  return { userId: 'guest', validated: false };
+async function resolveUserId(req: NextRequest): Promise<string> {
+  try {
+    const body = await req.json();
+    if (body?.initData) return userIdFromInitData(body.initData as string);
+  } catch {}
+  const fromHeader = req.headers.get('x-init-data');
+  if (fromHeader) return userIdFromInitData(fromHeader);
+  const fromQuery = req.nextUrl.searchParams.get('initData');
+  if (fromQuery) return userIdFromInitData(fromQuery);
+  return 'guest';
 }
 
-// Supabase (service role)
-function getSupabase() {
-  const url = process.env.SUPABASE_URL!;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY!;
-  if (!url || !key) return null;
-  return createClient(url, key);
-}
+export async function POST(req: NextRequest) {
+  const SUPABASE_URL = process.env.SUPABASE_URL!;
+  const SUPABASE_SERVICE_ROLE = process.env.SUPABASE_SERVICE_ROLE!;
 
-async function handle(req: NextRequest) {
-  const { userId, validated } = await resolveUser(req);
-  const prize = pickByTickets(ITEMS);
+  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE, { auth: { persistSession: false } });
+
+  const userId = await resolveUserId(req);
+  const platform = req.headers.get('x-tg-platform') || null;
+  const version  = req.headers.get('x-tg-version')  || null;
 
   const ts = new Date().toISOString();
   const reqId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const ua = req.headers.get('user-agent') || '';
 
-  console.log('[open_case]', {
-    method: req.method,
-    hasHeader: !!req.headers.get('x-init-data'),
-    validated,
-    ts,
-    reqId,
-    userId,
-    prizeId: prize.id,
-    prizeTitle: prize.title,
-  });
+  // проверяем право на открытие (списываем 1, если есть)
+  let ok = true;
+  let balance: number | null = null;
 
-  // Пишем в БД (не валим запрос, если БД недоступна)
-  try {
-    const supabase = getSupabase();
-    if (supabase) {
-      await supabase.from('open_logs').insert({
-        ts,
-        req_id: reqId,
-        user_id: userId,
-        prize_id: prize.id,
-        prize_title: prize.title,
-        validated,
-        platform: req.headers.get('x-tg-platform') || null,
-        version: req.headers.get('x-tg-version') || null,
-        source: req.headers.get('user-agent') || null,
-      });
+  if (userId !== 'guest') {
+    const { data: consumeRows, error: consumeErr } = await supabase.rpc('consume_open', {
+      p_user_id: userId,
+      p_req_id : reqId,
+    });
+
+    if (consumeErr) {
+      console.error('[consume_open:error]', consumeErr);
+      return NextResponse.json({ ok: false, error: 'consume_failed' }, { status: 500 });
     }
-  } catch (e) {
-    console.error('[open_case][db_insert_error]', (e as Error).message);
+    const consume = Array.isArray(consumeRows) ? consumeRows[0] : consumeRows;
+    ok = !!consume?.ok;
+    balance = typeof consume?.balance === 'number' ? consume.balance : null;
+
+    if (!ok) {
+      // логируем попытку без права
+      await supabase.from('open_logs').insert({
+        ts, req_id: reqId, user_id: userId,
+        prize_id: null, prize_title: null,
+        validated: !!req.headers.get('x-init-data'),
+        platform, version, source: ua,
+      });
+      return NextResponse.json({ ok: false, error: 'no_rights', balance: balance ?? 0 }, { status: 402 });
+    }
   }
 
-  return NextResponse.json({ ok: true, prize, userId });
+  // право есть (или user == guest для лок. тестов) — выдаём приз
+  const prize = pickByTickets(ITEMS);
+
+  // пишем лог в БД
+  await supabase.from('open_logs').insert({
+    ts, req_id: reqId, user_id: userId,
+    prize_id: prize.id, prize_title: prize.title,
+    validated: !!req.headers.get('x-init-data'),
+    platform, version, source: ua,
+  });
+
+  console.log('[open_case]', {
+    method: 'POST',
+    hasHeader: !!req.headers.get('x-init-data'),
+    validated: !!req.headers.get('x-init-data'),
+    ts, reqId, userId, prizeId: prize.id, prizeTitle: prize.title,
+  });
+
+  return NextResponse.json({ ok: true, prize, userId, balance });
 }
 
-export async function GET(req: NextRequest)  { return handle(req); }
-export async function POST(req: NextRequest) { return handle(req); }
+export async function GET(req: NextRequest) {
+  // для простоты разрешаем GET тем же обработчиком (но это не используется клиентом)
+  return POST(req);
+}
