@@ -1,5 +1,6 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
+import crypto from 'crypto';
 
 type Item = { id: string; title: string; tickets: number };
 
@@ -22,39 +23,68 @@ function pickByTickets(items: Item[]): Item {
   return items[items.length - 1];
 }
 
-function userIdFromInitData(initData?: string): string {
+function validateInitData(initData: string, botToken: string) {
   try {
-    if (!initData) return 'guest';
-    const p = new URLSearchParams(initData);
-    const userStr = p.get('user');
-    if (!userStr) return 'guest';
-    const user = JSON.parse(userStr);
-    return user?.id ? String(user.id) : 'guest';
-  } catch {
-    return 'guest';
+    const params = new URLSearchParams(initData);
+    const hash = params.get('hash');
+    if (!hash) return { ok: false, reason: 'no_hash' };
+
+    // data_check_string: all key=value except "hash", sorted and joined with \n
+    const dataCheckString = Array.from(params.entries())
+      .filter(([k]) => k !== 'hash')
+      .map(([k, v]) => `${k}=${v}`)
+      .sort()
+      .join('\n');
+
+    // secret_key = HMAC_SHA256(botToken, "WebAppData")
+    const secret = crypto
+      .createHmac('sha256', 'WebAppData')
+      .update(botToken)
+      .digest();
+
+    const calcHash = crypto
+      .createHmac('sha256', secret)
+      .update(dataCheckString)
+      .digest('hex');
+
+    if (calcHash !== hash) return { ok: false, reason: 'bad_hash' };
+
+    const userStr = params.get('user');
+    const user = userStr ? JSON.parse(userStr) : null;
+    const userId = user?.id ? String(user.id) : 'guest';
+
+    // опционально: «свежесть» не старше 24 часов
+    const authDate = Number(params.get('auth_date') || '0');
+    const maxAgeSec = 60 * 60 * 24;
+    const ageOk = authDate > 0 && (Date.now() / 1000 - authDate) <= maxAgeSec;
+
+    return { ok: true, userId, ageOk };
+  } catch (e) {
+    return { ok: false, reason: 'exception' };
   }
 }
 
-async function resolveUserId(req: NextRequest): Promise<string> {
-  // 1) тело
-  try {
-    const body = await req.json();
-    if (body?.initData) return userIdFromInitData(body.initData as string);
-  } catch { /* нет/не JSON — ок */ }
+async function resolveUserId(req: NextRequest) {
+  const botToken = process.env.TELEGRAM_BOT_TOKEN || '';
+  // читаем initData из разных мест (header/body/query)
+  let initData = req.headers.get('x-init-data') || '';
+  if (!initData) {
+    try {
+      const body = await req.json();
+      if (body?.initData) initData = body.initData as string;
+    } catch {}
+  }
+  if (!initData) initData = req.nextUrl.searchParams.get('initData') || '';
 
-  // 2) заголовок
-  const fromHeader = req.headers.get('x-init-data');
-  if (fromHeader) return userIdFromInitData(fromHeader);
-
-  // 3) query
-  const fromQuery = req.nextUrl.searchParams.get('initData');
-  if (fromQuery) return userIdFromInitData(fromQuery);
-
-  return 'guest';
+  if (initData && botToken) {
+    const res = validateInitData(initData, botToken);
+    return { userId: res.ok ? res.userId! : 'guest', validated: res.ok };
+  }
+  return { userId: 'guest', validated: false };
 }
 
 async function handle(req: NextRequest) {
-  const userId = await resolveUserId(req);
+  const { userId, validated } = await resolveUserId(req);
   const prize = pickByTickets(ITEMS);
 
   const ts = new Date().toISOString();
@@ -63,6 +93,7 @@ async function handle(req: NextRequest) {
   console.log('[open_case]', {
     method: req.method,
     hasHeader: !!req.headers.get('x-init-data'),
+    validated,
     ts,
     reqId,
     userId,
