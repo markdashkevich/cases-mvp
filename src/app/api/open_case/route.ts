@@ -24,16 +24,6 @@ function pickByTickets(items: Item[]) {
   return items[items.length - 1];
 }
 
-/**
- * Диагностическая валидация initData.
- * Считает HMAC четырьмя вариантами:
- *  - secretLogin  = sha256(botToken)         (Login Widget)
- *  - secretWebApp = HMAC_SHA256("WebAppData", botToken) (WebApp)
- *  ×
- *  - checkDec (URLSearchParams: значения декодированы)
- *  - checkRaw (значения как в исходной строке, без decode)
- * Если хоть один сошёлся — valid=true. В логи пишется mode/match.
- */
 function verifyInitData(initData: string, botToken: string): { valid: boolean; userId: string } {
   try {
     if (!initData || !botToken) return { valid: false, userId: 'guest' };
@@ -41,7 +31,7 @@ function verifyInitData(initData: string, botToken: string): { valid: boolean; u
     const params = new URLSearchParams(initData);
     const hash = (params.get('hash') || '').toLowerCase();
 
-    // decoded (то, что отдаёт URLSearchParams)
+    // decoded (URLSearchParams уже декодирует значения)
     const pairsDec: string[] = [];
     params.forEach((val, key) => {
       if (key === 'hash' || key === 'signature') return;
@@ -63,20 +53,25 @@ function verifyInitData(initData: string, botToken: string): { valid: boolean; u
     kvRaw.sort(([a], [b]) => a.localeCompare(b));
     const checkRaw = kvRaw.map(([k, v]) => `${k}=${v}`).join('\n');
 
-    // два вида секрета
-    const secretLogin  = createHash('sha256').update(botToken).digest();
-    const secretWebApp = createHmac('sha256', 'WebAppData').update(botToken).digest();
+    // три вида "секретов"
+    const secretLogin   = createHash('sha256').update(botToken).digest();                    // login widget
+    const secretWebAppA = createHmac('sha256', 'WebAppData').update(botToken).digest();      // key="WebAppData", msg=botToken
+    const secretWebAppB = createHmac('sha256', botToken).update('WebAppData').digest();      // key=botToken, msg="WebAppData"
 
-    // четыре HMAC
+    // 6 HMAC-комбинаций
     const h1 = createHmac('sha256', secretLogin).update(checkDec).digest('hex');
     const h2 = createHmac('sha256', secretLogin).update(checkRaw).digest('hex');
-    const h3 = createHmac('sha256', secretWebApp).update(checkDec).digest('hex');
-    const h4 = createHmac('sha256', secretWebApp).update(checkRaw).digest('hex');
+    const h3 = createHmac('sha256', secretWebAppA).update(checkDec).digest('hex');
+    const h4 = createHmac('sha256', secretWebAppA).update(checkRaw).digest('hex');
+    const h5 = createHmac('sha256', secretWebAppB).update(checkDec).digest('hex');
+    const h6 = createHmac('sha256', secretWebAppB).update(checkRaw).digest('hex');
 
     let mode = '';
     let valid = false;
-    if (h3 === hash) { valid = true; mode = 'webapp+decoded'; }
-    else if (h4 === hash) { valid = true; mode = 'webapp+raw'; }
+    if (h5 === hash) { valid = true; mode = 'webappB+decoded'; }
+    else if (h6 === hash) { valid = true; mode = 'webappB+raw'; }
+    else if (h3 === hash) { valid = true; mode = 'webappA+decoded'; }
+    else if (h4 === hash) { valid = true; mode = 'webappA+raw'; }
     else if (h1 === hash) { valid = true; mode = 'login+decoded'; }
     else if (h2 === hash) { valid = true; mode = 'login+raw'; }
 
@@ -84,7 +79,8 @@ function verifyInitData(initData: string, botToken: string): { valid: boolean; u
       len: initData.length,
       hasHash: !!hash,
       mode,
-      match: { h1: h1 === hash, h2: h2 === hash, h3: h3 === hash, h4: h4 === hash },
+      match: { h1: h1 === hash, h2: h2 === hash, h3: h3 === hash, h4: h4 === hash, h5: h5 === hash, h6: h6 === hash },
+      tokenLen: botToken.length, // без вывода самого токена
       sampleDec: checkDec.slice(0, 120),
       sampleRaw: checkRaw.slice(0, 120),
     });
