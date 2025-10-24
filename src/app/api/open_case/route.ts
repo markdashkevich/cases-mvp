@@ -24,27 +24,41 @@ function pickByTickets(items: Item[]) {
   return items[items.length - 1];
 }
 
+/** Собираем checkString из СЫРЫХ значений initData (без decode), сортировка по ключам */
+function buildCheckStringAndHash(initData: string): { checkString: string; hash: string } {
+  const usp = new URLSearchParams(initData);
+  const hash = usp.get('hash') ?? '';
+
+  const pairsRaw = initData.split('&');
+  const kv: Array<[string, string]> = [];
+
+  for (const p of pairsRaw) {
+    const i = p.indexOf('=');
+    if (i < 0) continue;
+    const rawKey = p.slice(0, i);
+    const rawVal = p.slice(i + 1); // ВАЖНО: не декодируем
+    const key = decodeURIComponent(rawKey); // ключ декодируем только для корректной сортировки
+    if (key === 'hash') continue;
+    kv.push([key, rawVal]);
+  }
+
+  kv.sort(([a], [b]) => a.localeCompare(b));
+  const checkString = kv.map(([k, v]) => `${k}=${v}`).join('\n');
+  return { checkString, hash };
+}
+
 function verifyInitData(initData: string, botToken: string): { valid: boolean; userId: string } {
   try {
     if (!initData || !botToken) return { valid: false, userId: 'guest' };
 
-    const params = new URLSearchParams(initData);
-    const hash = params.get('hash') || '';
-    params.delete('hash');
-
-    const pairs: string[] = [];
-    params.forEach((val, key) => {
-      // Telegram требует сортировку по ключу, формат "key=value"
-      if (val !== undefined && val !== null) pairs.push(`${key}=${val}`);
-    });
-    pairs.sort();
-    const checkString = pairs.join('\n');
-
+    const { checkString, hash } = buildCheckStringAndHash(initData);
     const secret = createHash('sha256').update(botToken).digest();
     const hmac = createHmac('sha256', secret).update(checkString).digest('hex');
     const valid = hmac === hash;
 
+    // userId берём из ДЕКОДИРОВАННЫХ params (это уже не влияет на HMAC)
     let userId = 'guest';
+    const params = new URLSearchParams(initData);
     const userStr = params.get('user');
     if (userStr) {
       const u = JSON.parse(userStr);
@@ -135,4 +149,5 @@ export async function POST(req: NextRequest) {
 export async function GET(req: NextRequest) {
   return POST(req);
 }
+
 
