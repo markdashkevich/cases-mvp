@@ -31,7 +31,6 @@ export default function Home() {
     }));
   };
 
-  // пробуем сразу
   useEffect(() => {
     refreshDbg();
   }, []);
@@ -56,17 +55,17 @@ export default function Home() {
       const tg = (window as any)?.Telegram?.WebApp;
       const initData: string = tg?.initData || '';
       const platform = tg?.platform || '';
-      const version = tg?.version || '';
+      const version  = tg?.version  || '';
 
       const res = await fetch('/api/open_case', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-init-data': initData,
+          // важно: initData больше НЕ передаём в заголовке
           'x-tg-platform': platform,
           'x-tg-version': version,
         },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ initData }), // передаём initData в теле
       });
 
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
