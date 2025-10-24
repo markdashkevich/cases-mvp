@@ -1,7 +1,7 @@
 // src/app/api/open_case/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { createHmac } from 'crypto';
+import { createHmac, createHash } from 'crypto';
 
 type Item = { id: string; title: string; tickets: number };
 
@@ -24,35 +24,73 @@ function pickByTickets(items: Item[]) {
   return items[items.length - 1];
 }
 
-/** Строим data_check_string: все пары КРОМЕ hash и signature, отсортировано, через \n */
-function buildCheckStringAndHash(initData: string): { checkString: string; hash: string } {
-  const params = new URLSearchParams(initData);
-  const hash = params.get('hash') ?? '';
-
-  const pairs: string[] = [];
-  params.forEach((val, key) => {
-    if (key === 'hash' || key === 'signature') return;
-    pairs.push(`${key}=${val}`); // значения — как их вернул URLSearchParams
-  });
-  pairs.sort();
-  return { checkString: pairs.join('\n'), hash };
-}
-
-/** Правильная валидация initData для Telegram Mini Apps */
+/**
+ * Диагностическая валидация initData.
+ * Считает HMAC четырьмя вариантами:
+ *  - secretLogin  = sha256(botToken)         (Login Widget)
+ *  - secretWebApp = HMAC_SHA256("WebAppData", botToken) (WebApp)
+ *  ×
+ *  - checkDec (URLSearchParams: значения декодированы)
+ *  - checkRaw (значения как в исходной строке, без decode)
+ * Если хоть один сошёлся — valid=true. В логи пишется mode/match.
+ */
 function verifyInitData(initData: string, botToken: string): { valid: boolean; userId: string } {
   try {
     if (!initData || !botToken) return { valid: false, userId: 'guest' };
 
-    const { checkString, hash } = buildCheckStringAndHash(initData);
-
-    // секрет = HMAC_SHA256(bot_token) с ключом "WebAppData"
-    const secret = createHmac('sha256', 'WebAppData').update(botToken).digest();
-    const hmac   = createHmac('sha256', secret).update(checkString).digest('hex');
-    const valid  = hmac === (hash ?? '').toLowerCase();
-
-    // userId достаём из декодированных params
-    let userId = 'guest';
     const params = new URLSearchParams(initData);
+    const hash = (params.get('hash') || '').toLowerCase();
+
+    // decoded (то, что отдаёт URLSearchParams)
+    const pairsDec: string[] = [];
+    params.forEach((val, key) => {
+      if (key === 'hash' || key === 'signature') return;
+      pairsDec.push(`${key}=${val}`);
+    });
+    pairsDec.sort();
+    const checkDec = pairsDec.join('\n');
+
+    // raw (значения как есть в исходной строке)
+    const kvRaw: Array<[string, string]> = [];
+    for (const p of initData.split('&')) {
+      const i = p.indexOf('=');
+      if (i < 0) continue;
+      const k = decodeURIComponent(p.slice(0, i)); // ключ для сортировки
+      const v = p.slice(i + 1);                    // значение НЕ декодируем
+      if (k === 'hash' || k === 'signature') continue;
+      kvRaw.push([k, v]);
+    }
+    kvRaw.sort(([a], [b]) => a.localeCompare(b));
+    const checkRaw = kvRaw.map(([k, v]) => `${k}=${v}`).join('\n');
+
+    // два вида секрета
+    const secretLogin  = createHash('sha256').update(botToken).digest();
+    const secretWebApp = createHmac('sha256', 'WebAppData').update(botToken).digest();
+
+    // четыре HMAC
+    const h1 = createHmac('sha256', secretLogin).update(checkDec).digest('hex');
+    const h2 = createHmac('sha256', secretLogin).update(checkRaw).digest('hex');
+    const h3 = createHmac('sha256', secretWebApp).update(checkDec).digest('hex');
+    const h4 = createHmac('sha256', secretWebApp).update(checkRaw).digest('hex');
+
+    let mode = '';
+    let valid = false;
+    if (h3 === hash) { valid = true; mode = 'webapp+decoded'; }
+    else if (h4 === hash) { valid = true; mode = 'webapp+raw'; }
+    else if (h1 === hash) { valid = true; mode = 'login+decoded'; }
+    else if (h2 === hash) { valid = true; mode = 'login+raw'; }
+
+    console.log('[initData:verify]', {
+      len: initData.length,
+      hasHash: !!hash,
+      mode,
+      match: { h1: h1 === hash, h2: h2 === hash, h3: h3 === hash, h4: h4 === hash },
+      sampleDec: checkDec.slice(0, 120),
+      sampleRaw: checkRaw.slice(0, 120),
+    });
+
+    // userId из декодированного user
+    let userId = 'guest';
     const userStr = params.get('user');
     if (userStr) {
       const u = JSON.parse(userStr);
