@@ -2,8 +2,8 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-// Важно: импорт как namespace, чтобы не было конфликтов типов у разных версий пакета
 import * as Init from '@telegram-apps/init-data-node';
+import { createHash } from 'crypto';
 
 type Item = { id: string; title: string; tickets: number };
 
@@ -38,7 +38,6 @@ async function readInitData(req: NextRequest): Promise<string> {
   return '';
 }
 
-// Обёртка, совместимая с разными версиями пакета (check/validate)
 function verifyInitData(initData: string, botToken: string): { valid: boolean; userId: string } {
   try {
     if (!initData || !botToken) return { valid: false, userId: 'guest' };
@@ -58,9 +57,7 @@ function verifyInitData(initData: string, botToken: string): { valid: boolean; u
           ? anyInit.validate(initData, botToken)
           : false;
 
-    const userId =
-      parsed?.user?.id != null ? String(parsed.user.id) : 'guest';
-
+    const userId = parsed?.user?.id != null ? String(parsed.user.id) : 'guest';
     return { valid: !!valid, userId };
   } catch {
     return { valid: false, userId: 'guest' };
@@ -75,6 +72,19 @@ export async function POST(req: NextRequest) {
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE, {
     auth: { persistSession: false },
   });
+
+  // --- ВРЕМЕННАЯ ДИАГНОСТИКА ТОКЕНА В РАНТАЙМЕ ---
+  const tokenHead = createHash('sha256').update(BOT_TOKEN).digest('hex').slice(0, 8);
+  let getMeUser = '';
+  try {
+    const r = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/getMe`);
+    const j = await r.json();
+    getMeUser = j?.result?.username || JSON.stringify(j);
+  } catch (e) {
+    getMeUser = 'getMe_failed';
+  }
+  console.log('[token:check]', { tokenHead, getMeUser });
+  // ------------------------------------------------
 
   const initData = await readInitData(req);
   const { valid: isValid, userId } = verifyInitData(initData, BOT_TOKEN);
@@ -128,6 +138,7 @@ export async function POST(req: NextRequest) {
     hasHeader: !!req.headers.get('x-init-data'),
     validated: isValid,
     ts, reqId, userId, prizeId: prize.id, prizeTitle: prize.title,
+    initLen: initData?.length || 0,
   });
 
   return NextResponse.json({ ok: true, prize, userId, balance, validated: isValid });
