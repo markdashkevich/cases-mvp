@@ -1,9 +1,7 @@
 // src/app/api/open_case/route.ts
-import type { NextRequest } from 'next/server';
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import * as Init from '@telegram-apps/init-data-node';
-import { createHash } from 'crypto';
+import { parse as parseInitData, validate as validateInitData } from '@telegram-apps/init-data-node';
 
 type Item = { id: string; title: string; tickets: number };
 
@@ -26,41 +24,40 @@ function pickByTickets(items: Item[]) {
   return items[items.length - 1];
 }
 
-async function readInitData(req: NextRequest): Promise<string> {
+async function readInitData(req: NextRequest): Promise<{ raw: string; hasHeader: boolean }> {
+  // 1) сначала из заголовка
+  const fromHeader = req.headers.get('x-init-data');
+  if (fromHeader) return { raw: fromHeader, hasHeader: true };
+
+  // 2) потом из тела (мы будем дублировать туда на клиенте)
   try {
     const body = await req.json();
-    if (body?.initData) return String(body.initData);
+    if (body?.initData) return { raw: String(body.initData), hasHeader: false };
   } catch {}
-  const fromHeader = req.headers.get('x-init-data');
-  if (fromHeader) return fromHeader;
+
+  // 3) на крайний случай — query (?initData=...)
   const fromQuery = req.nextUrl.searchParams.get('initData');
-  if (fromQuery) return fromQuery;
-  return '';
+  if (fromQuery) return { raw: fromQuery, hasHeader: false };
+
+  return { raw: '', hasHeader: false };
 }
 
-function verifyInitData(initData: string, botToken: string): { valid: boolean; userId: string } {
+function verifyInitData(initDataRaw: string, botToken: string): { valid: boolean; userId: string } {
   try {
-    if (!initData || !botToken) return { valid: false, userId: 'guest' };
-
-    const anyInit = Init as unknown as {
-      parse?: (s: string) => any;
-      check?: (s: string, token: string) => boolean;
-      validate?: (s: string, token: string) => boolean;
-    };
-
-    const parsed = typeof anyInit.parse === 'function' ? anyInit.parse(initData) : undefined;
-
-    const valid =
-      typeof anyInit.check === 'function'
-        ? anyInit.check(initData, botToken)
-        : typeof anyInit.validate === 'function'
-          ? anyInit.validate(initData, botToken)
-          : false;
-
-    const userId = parsed?.user?.id != null ? String(parsed.user.id) : 'guest';
-    return { valid: !!valid, userId };
+    if (!initDataRaw || !botToken) return { valid: false, userId: 'guest' };
+    // validate бросит, если подпись/срок неверны
+    validateInitData(initDataRaw, botToken);
+    const parsed = parseInitData(initDataRaw);
+    const userId = parsed.user?.id ? String(parsed.user.id) : 'guest';
+    return { valid: true, userId };
   } catch {
-    return { valid: false, userId: 'guest' };
+    try {
+      // даже если подпись не прошла — попробуем вытащить user_id для UX
+      const p = parseInitData(initDataRaw);
+      return { valid: false, userId: p.user?.id ? String(p.user.id) : 'guest' };
+    } catch {
+      return { valid: false, userId: 'guest' };
+    }
   }
 }
 
@@ -69,25 +66,10 @@ export async function POST(req: NextRequest) {
   const SUPABASE_SERVICE_ROLE = process.env.SUPABASE_SERVICE_ROLE_KEY!;
   const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 
-  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE, {
-    auth: { persistSession: false },
-  });
+  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE, { auth: { persistSession: false } });
 
-  // --- ВРЕМЕННАЯ ДИАГНОСТИКА ТОКЕНА В РАНТАЙМЕ ---
-  const tokenHead = createHash('sha256').update(BOT_TOKEN).digest('hex').slice(0, 8);
-  let getMeUser = '';
-  try {
-    const r = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/getMe`);
-    const j = await r.json();
-    getMeUser = j?.result?.username || JSON.stringify(j);
-  } catch (e) {
-    getMeUser = 'getMe_failed';
-  }
-  console.log('[token:check]', { tokenHead, getMeUser });
-  // ------------------------------------------------
-
-  const initData = await readInitData(req);
-  const { valid: isValid, userId } = verifyInitData(initData, BOT_TOKEN);
+  const { raw: initDataRaw, hasHeader } = await readInitData(req);
+  const { valid: isValid, userId } = verifyInitData(initDataRaw, BOT_TOKEN);
 
   const platform = req.headers.get('x-tg-platform') || null;
   const version  = req.headers.get('x-tg-version')  || null;
@@ -95,6 +77,11 @@ export async function POST(req: NextRequest) {
   const ts = new Date().toISOString();
   const reqId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const ua = req.headers.get('user-agent') || '';
+
+  console.log('[token:check]', {
+    hasHeader,
+    initLen: initDataRaw?.length || 0,
+  });
 
   let ok = true;
   let balance: number | null = null;
@@ -108,7 +95,6 @@ export async function POST(req: NextRequest) {
       console.error('[consume_open:error]', consumeErr);
       return NextResponse.json({ ok: false, error: 'consume_failed' }, { status: 500 });
     }
-
     const consume = Array.isArray(consumeRows) ? consumeRows[0] : consumeRows;
     ok = !!consume?.ok;
     balance = typeof consume?.balance === 'number' ? consume.balance : null;
@@ -135,10 +121,9 @@ export async function POST(req: NextRequest) {
 
   console.log('[open_case]', {
     method: 'POST',
-    hasHeader: !!req.headers.get('x-init-data'),
+    hasHeader,
     validated: isValid,
     ts, reqId, userId, prizeId: prize.id, prizeTitle: prize.title,
-    initLen: initData?.length || 0,
   });
 
   return NextResponse.json({ ok: true, prize, userId, balance, validated: isValid });
