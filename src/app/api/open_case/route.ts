@@ -24,42 +24,33 @@ function pickByTickets(items: Item[]) {
   return items[items.length - 1];
 }
 
-/** Собираем checkString из СЫРЫХ значений initData (без decode), сортировка по ключам */
+/** Строим data_check_string: все пары КРОМЕ hash и signature, отсортировано, через \n */
 function buildCheckStringAndHash(initData: string): { checkString: string; hash: string } {
-  const usp = new URLSearchParams(initData);
-  const hash = usp.get('hash') ?? '';
+  const params = new URLSearchParams(initData);
+  const hash = params.get('hash') ?? '';
 
-  const pairsRaw = initData.split('&');
-  const kv: Array<[string, string]> = [];
-
-  for (const p of pairsRaw) {
-    const i = p.indexOf('=');
-    if (i < 0) continue;
-    const rawKey = p.slice(0, i);
-    const rawVal = p.slice(i + 1); // ВАЖНО: не декодируем значение
-    const key = decodeURIComponent(rawKey); // ключ декодируем для корректной сортировки
-    if (key === 'hash') continue;
-    kv.push([key, rawVal]);
-  }
-
-  kv.sort(([a], [b]) => a.localeCompare(b));
-  const checkString = kv.map(([k, v]) => `${k}=${v}`).join('\n');
-  return { checkString, hash };
+  const pairs: string[] = [];
+  params.forEach((val, key) => {
+    if (key === 'hash' || key === 'signature') return;
+    pairs.push(`${key}=${val}`); // значения — как их вернул URLSearchParams
+  });
+  pairs.sort();
+  return { checkString: pairs.join('\n'), hash };
 }
 
-/** Правильная валидация initData для Telegram Web Apps */
+/** Правильная валидация initData для Telegram Mini Apps */
 function verifyInitData(initData: string, botToken: string): { valid: boolean; userId: string } {
   try {
     if (!initData || !botToken) return { valid: false, userId: 'guest' };
 
     const { checkString, hash } = buildCheckStringAndHash(initData);
 
-    // секрет = HMAC_SHA256(botToken) с ключом "WebAppData"
+    // секрет = HMAC_SHA256(bot_token) с ключом "WebAppData"
     const secret = createHmac('sha256', 'WebAppData').update(botToken).digest();
     const hmac   = createHmac('sha256', secret).update(checkString).digest('hex');
-    const valid  = hmac === hash;
+    const valid  = hmac === (hash ?? '').toLowerCase();
 
-    // userId можно разобрать из декодированных params
+    // userId достаём из декодированных params
     let userId = 'guest';
     const params = new URLSearchParams(initData);
     const userStr = params.get('user');
