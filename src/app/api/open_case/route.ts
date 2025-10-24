@@ -1,7 +1,7 @@
 // src/app/api/open_case/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { createHmac, createHash } from 'crypto';
+import { createHmac } from 'crypto';
 
 type Item = { id: string; title: string; tickets: number };
 
@@ -36,8 +36,8 @@ function buildCheckStringAndHash(initData: string): { checkString: string; hash:
     const i = p.indexOf('=');
     if (i < 0) continue;
     const rawKey = p.slice(0, i);
-    const rawVal = p.slice(i + 1); // ВАЖНО: не декодируем
-    const key = decodeURIComponent(rawKey); // ключ декодируем только для корректной сортировки
+    const rawVal = p.slice(i + 1); // ВАЖНО: не декодируем значение
+    const key = decodeURIComponent(rawKey); // ключ декодируем для корректной сортировки
     if (key === 'hash') continue;
     kv.push([key, rawVal]);
   }
@@ -47,16 +47,19 @@ function buildCheckStringAndHash(initData: string): { checkString: string; hash:
   return { checkString, hash };
 }
 
+/** Правильная валидация initData для Telegram Web Apps */
 function verifyInitData(initData: string, botToken: string): { valid: boolean; userId: string } {
   try {
     if (!initData || !botToken) return { valid: false, userId: 'guest' };
 
     const { checkString, hash } = buildCheckStringAndHash(initData);
-    const secret = createHash('sha256').update(botToken).digest();
-    const hmac = createHmac('sha256', secret).update(checkString).digest('hex');
-    const valid = hmac === hash;
 
-    // userId берём из ДЕКОДИРОВАННЫХ params (это уже не влияет на HMAC)
+    // секрет = HMAC_SHA256(botToken) с ключом "WebAppData"
+    const secret = createHmac('sha256', 'WebAppData').update(botToken).digest();
+    const hmac   = createHmac('sha256', secret).update(checkString).digest('hex');
+    const valid  = hmac === hash;
+
+    // userId можно разобрать из декодированных params
     let userId = 'guest';
     const params = new URLSearchParams(initData);
     const userStr = params.get('user');
@@ -71,7 +74,6 @@ function verifyInitData(initData: string, botToken: string): { valid: boolean; u
 }
 
 async function readInitData(req: NextRequest): Promise<string> {
-  // initData может прийти в теле, заголовке или query
   try {
     const body = await req.json();
     if (body?.initData) return String(body.initData);
@@ -149,5 +151,3 @@ export async function POST(req: NextRequest) {
 export async function GET(req: NextRequest) {
   return POST(req);
 }
-
-
