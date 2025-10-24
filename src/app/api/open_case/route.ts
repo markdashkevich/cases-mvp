@@ -1,7 +1,7 @@
 // src/app/api/open_case/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { parse as parseInitData, validate as validateInitData } from '@telegram-apps/init-data-node';
+import { parse as parseInitData, validate as validateInitData } from '@tma.js/init-data-node';
 
 type Item = { id: string; title: string; tickets: number };
 

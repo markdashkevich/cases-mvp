@@ -11,9 +11,9 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.76.1",
-    "@telegram-apps/init-data-node": "^2.0.10",
     "@telegram-apps/sdk-react": "^3.2.4",
     "@telegram-apps/telegram-ui": "^2.1.5",
+    "@tma.js/init-data-node": "^2.0.3",
     "@tonconnect/ui-react": "^2.1.0",
     "eruda": "^3.0.1",
     "next": "15.3.1",
