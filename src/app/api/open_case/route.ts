@@ -29,9 +29,15 @@ function verifyInitData(initData: string, botToken: string): { valid: boolean; u
     if (!initData || !botToken) return { valid: false, userId: 'guest' };
 
     const params = new URLSearchParams(initData);
-    const hash = (params.get('hash') || '').toLowerCase();
+    const hash = (params.get('hash') || '').trim();
+    const hashLower = hash.toLowerCase();
 
-    // decoded (URLSearchParams уже декодирует значения)
+    // какие ключи реально пришли
+    const keys: string[] = [];
+    params.forEach((_, k) => keys.push(k));
+    keys.sort();
+
+    // decoded checkString (URLSearchParams уже декодирует значения)
     const pairsDec: string[] = [];
     params.forEach((val, key) => {
       if (key === 'hash' || key === 'signature') return;
@@ -40,7 +46,7 @@ function verifyInitData(initData: string, botToken: string): { valid: boolean; u
     pairsDec.sort();
     const checkDec = pairsDec.join('\n');
 
-    // raw (значения как есть в исходной строке)
+    // raw checkString (значения как в исходной строке)
     const kvRaw: Array<[string, string]> = [];
     for (const p of initData.split('&')) {
       const i = p.indexOf('=');
@@ -53,12 +59,12 @@ function verifyInitData(initData: string, botToken: string): { valid: boolean; u
     kvRaw.sort(([a], [b]) => a.localeCompare(b));
     const checkRaw = kvRaw.map(([k, v]) => `${k}=${v}`).join('\n');
 
-    // три вида "секретов"
-    const secretLogin   = createHash('sha256').update(botToken).digest();                    // login widget
-    const secretWebAppA = createHmac('sha256', 'WebAppData').update(botToken).digest();      // key="WebAppData", msg=botToken
-    const secretWebAppB = createHmac('sha256', botToken).update('WebAppData').digest();      // key=botToken, msg="WebAppData"
+    // три "секрета"
+    const secretLogin   = createHash('sha256').update(botToken).digest();                 // login-widget
+    const secretWebAppA = createHmac('sha256', 'WebAppData').update(botToken).digest();   // key="WebAppData", msg=botToken
+    const secretWebAppB = createHmac('sha256', botToken).update('WebAppData').digest();   // key=botToken, msg="WebAppData"
 
-    // 6 HMAC-комбинаций
+    // считаем 6 вариантов
     const h1 = createHmac('sha256', secretLogin).update(checkDec).digest('hex');
     const h2 = createHmac('sha256', secretLogin).update(checkRaw).digest('hex');
     const h3 = createHmac('sha256', secretWebAppA).update(checkDec).digest('hex');
@@ -68,24 +74,41 @@ function verifyInitData(initData: string, botToken: string): { valid: boolean; u
 
     let mode = '';
     let valid = false;
-    if (h5 === hash) { valid = true; mode = 'webappB+decoded'; }
-    else if (h6 === hash) { valid = true; mode = 'webappB+raw'; }
-    else if (h3 === hash) { valid = true; mode = 'webappA+decoded'; }
-    else if (h4 === hash) { valid = true; mode = 'webappA+raw'; }
-    else if (h1 === hash) { valid = true; mode = 'login+decoded'; }
-    else if (h2 === hash) { valid = true; mode = 'login+raw'; }
+    if (h3 === hashLower) { valid = true; mode = 'webappA+decoded'; }
+    else if (h4 === hashLower) { valid = true; mode = 'webappA+raw'; }
+    else if (h1 === hashLower) { valid = true; mode = 'login+decoded'; }
+    else if (h2 === hashLower) { valid = true; mode = 'login+raw'; }
+    else if (h5 === hashLower) { valid = true; mode = 'webappB+decoded'; }
+    else if (h6 === hashLower) { valid = true; mode = 'webappB+raw'; }
 
+    // подробный лог (без утечек всей строки)
+    const isHex = /^[0-9a-fA-F]+$/.test(hash);
     console.log('[initData:verify]', {
       len: initData.length,
-      hasHash: !!hash,
+      keys,
+      hashLen: hash.length,
+      hashIsHex: isHex,
       mode,
-      match: { h1: h1 === hash, h2: h2 === hash, h3: h3 === hash, h4: h4 === hash, h5: h5 === hash, h6: h6 === hash },
-      tokenLen: botToken.length, // без вывода самого токена
+      match: {
+        h1: h1.slice(0, 8) === hashLower.slice(0, 8),
+        h2: h2.slice(0, 8) === hashLower.slice(0, 8),
+        h3: h3.slice(0, 8) === hashLower.slice(0, 8),
+        h4: h4.slice(0, 8) === hashLower.slice(0, 8),
+        h5: h5.slice(0, 8) === hashLower.slice(0, 8),
+        h6: h6.slice(0, 8) === hashLower.slice(0, 8),
+      },
+      hashHead: hashLower.slice(0, 8),
+      h1Head: h1.slice(0, 8),
+      h2Head: h2.slice(0, 8),
+      h3Head: h3.slice(0, 8),
+      h4Head: h4.slice(0, 8),
+      h5Head: h5.slice(0, 8),
+      h6Head: h6.slice(0, 8),
       sampleDec: checkDec.slice(0, 120),
       sampleRaw: checkRaw.slice(0, 120),
     });
 
-    // userId из декодированного user
+    // userId
     let userId = 'guest';
     const userStr = params.get('user');
     if (userStr) {
