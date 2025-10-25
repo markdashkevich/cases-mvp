@@ -45,7 +45,9 @@ export default function Home() {
       refreshDbg();
     };
     document.head.appendChild(s);
-    return () => { document.head.removeChild(s); };
+    return () => {
+      document.head.removeChild(s);
+    };
   }, []);
 
   const testOpen = useCallback(async () => {
@@ -55,17 +57,19 @@ export default function Home() {
       const tg = (window as any)?.Telegram?.WebApp;
       const initData: string = tg?.initData || '';
       const platform = tg?.platform || '';
-      const version  = tg?.version  || '';
+      const version = tg?.version || '';
 
       const res = await fetch('/api/open_case', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          // важно: initData больше НЕ передаём в заголовке
+          // дублируем initData в заголовке
+          'x-init-data': initData,
           'x-tg-platform': platform,
           'x-tg-version': version,
         },
-        body: JSON.stringify({ initData }), // передаём initData в теле
+        // и в теле — на случай, если хедер где-то потеряется
+        body: JSON.stringify({ initData, platform, version }),
       });
 
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -101,9 +105,11 @@ export default function Home() {
       {error && <div style={{ color: 'crimson' }}>Ошибка: {error}</div>}
 
       {/* небольшой отладчик снизу — потом уберём */}
-      <div style={{ position:'fixed', bottom: 12, left: 12, fontSize: 11, opacity: 0.85, maxWidth: 380, lineHeight: 1.2 }}>
-        dbg → tg:{String(dbg.hasTg)} | init:{String(dbg.hasInit)} | len:{dbg.initLen} | {dbg.platform ?? '-'} {dbg.version ?? ''}<br/>
-        scriptLoaded:{String(dbg.scriptLoaded)}<br/>
+      <div style={{ position: 'fixed', bottom: 12, left: 12, fontSize: 11, opacity: 0.85, maxWidth: 380, lineHeight: 1.2 }}>
+        dbg → tg:{String(dbg.hasTg)} | init:{String(dbg.hasInit)} | len:{dbg.initLen} | {dbg.platform ?? '-'} {dbg.version ?? ''}
+        <br />
+        scriptLoaded:{String(dbg.scriptLoaded)}
+        <br />
         href:{dbg.href}
       </div>
     </main>
