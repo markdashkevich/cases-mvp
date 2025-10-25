@@ -35,7 +35,7 @@ export default function Home() {
     refreshDbg();
   }, []);
 
-  // подгружаем SDK вручную (надёжно для tdesktop/ios/android)
+  // подгружаем SDK (на всякий случай для tdesktop/ios/android)
   useEffect(() => {
     const s = document.createElement('script');
     s.src = 'https://telegram.org/js/telegram-web-app.js';
@@ -63,13 +63,11 @@ export default function Home() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          // дублируем initData в заголовке
-          'x-init-data': initData,
+          'x-init-data': initData,          // дублируем и в хедере
           'x-tg-platform': platform,
           'x-tg-version': version,
         },
-        // и в теле — на случай, если хедер где-то потеряется
-        body: JSON.stringify({ initData, platform, version }),
+        body: JSON.stringify({ initData, platform, version }), // и в теле
       });
 
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -82,24 +80,87 @@ export default function Home() {
     }
   }, []);
 
+  // Новый обработчик покупки Stars
+  const buyOne = useCallback(async () => {
+    setError('');
+    try {
+      const tg = (window as any)?.Telegram?.WebApp;
+      if (!tg?.openInvoice) throw new Error('WebApp API недоступен');
+
+      const initData: string = tg?.initData || '';
+      const platform = tg?.platform || '';
+      const version = tg?.version || '';
+
+      // создаём инвойс на сервере
+      const r = await fetch('/api/create_invoice', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-init-data': initData,
+          'x-tg-platform': platform,
+          'x-tg-version': version,
+        },
+        body: JSON.stringify({ initData, platform, version }),
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const { ok, link, payload, error: err } = await r.json();
+      if (!ok || !link) throw new Error(err ?? 'Не удалось создать счёт');
+
+      // открываем инвойс в Mini App
+      tg.openInvoice(link, (status: string) => {
+        // возможные: 'paid' | 'cancelled' | 'failed' | 'pending'
+        if (status === 'paid') {
+          // следующий шаг: вызвать сервер для grant_open с payload
+          // (прикрутим это на следующем шаге)
+          setMsg('Оплачено ✅ — право будет выдано следующим шагом интеграции');
+        } else if (status === 'cancelled') {
+          setError('Платёж отменён');
+        } else if (status === 'failed') {
+          setError('Платёж не прошёл');
+        } else {
+          setMsg('Статус платежа: ' + status);
+        }
+      });
+    } catch (e: any) {
+      setError(e?.message ?? 'Не удалось создать/открыть счёт');
+    }
+  }, []);
+
   return (
     <main style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', gap: 16 }}>
       <h1 style={{ margin: 0 }}>Cases MVP</h1>
 
-      <button
-        onClick={testOpen}
-        style={{
-          padding: '12px 20px',
-          border: 'none',
-          borderRadius: 12,
-          background: '#4F46E5',
-          color: '#fff',
-          fontWeight: 800,
-          cursor: 'pointer',
-        }}
-      >
-        Тест: открыть API
-      </button>
+      <div style={{ display: 'grid', gap: 8 }}>
+        <button
+          onClick={testOpen}
+          style={{
+            padding: '12px 20px',
+            border: 'none',
+            borderRadius: 12,
+            background: '#4F46E5',
+            color: '#fff',
+            fontWeight: 800,
+            cursor: 'pointer',
+          }}
+        >
+          Тест: открыть API
+        </button>
+
+        <button
+          onClick={buyOne}
+          style={{
+            padding: '12px 20px',
+            border: 'none',
+            borderRadius: 12,
+            background: '#16a34a',
+            color: '#fff',
+            fontWeight: 800,
+            cursor: 'pointer',
+          }}
+        >
+          Купить 1 открытие (Stars)
+        </button>
+      </div>
 
       {msg && <div>Ответ сервера: <b>{msg}</b></div>}
       {error && <div style={{ color: 'crimson' }}>Ошибка: {error}</div>}
