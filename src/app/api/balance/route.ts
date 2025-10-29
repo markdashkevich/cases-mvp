@@ -1,7 +1,7 @@
 // src/app/api/balance/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { initData as Init } from '@tma.js/init-data-node';
+import * as Init from '@tma.js/init-data-node';
 
 // читаем initData из тела / заголовка / query
 async function readInitData(req: NextRequest): Promise<string> {
@@ -19,14 +19,25 @@ async function readInitData(req: NextRequest): Promise<string> {
 function verifyInitData(initData: string, botToken: string): { valid: boolean; userId: string } {
   try {
     if (!initData || !botToken) return { valid: false, userId: 'guest' };
+
     const parsed = Init.parse(initData);
-    const valid  = Init.check(initData, botToken);
+
+    let isValid = false;
+    try {
+      // бросит ошибку, если подпись неверная
+      Init.validate(initData, botToken);
+      isValid = true;
+    } catch {
+      isValid = false;
+    }
+
     const userId = parsed.user?.id ? String(parsed.user.id) : 'guest';
-    return { valid, userId };
+    return { valid: isValid, userId };
   } catch {
     return { valid: false, userId: 'guest' };
   }
 }
+
 
 async function handler(req: NextRequest) {
   const SUPABASE_URL = process.env.SUPABASE_URL!;
@@ -40,7 +51,7 @@ async function handler(req: NextRequest) {
   const initData = await readInitData(req);
   const { valid: isValid, userId } = verifyInitData(initData, BOT_TOKEN);
 
-  // гостьам отдаём 0, но не падаем
+  // гостям отдаём 0, но не падаем
   if (userId === 'guest') {
     return NextResponse.json({ ok: true, balance: 0, userId, validated: isValid });
   }
@@ -57,7 +68,6 @@ async function handler(req: NextRequest) {
   }
 
   const balance = data?.balance ?? 0;
-
   return NextResponse.json({ ok: true, balance, userId, validated: isValid });
 }
 
