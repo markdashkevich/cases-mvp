@@ -3,25 +3,20 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { parse as parseInitData, validate as validateInitData } from '@tma.js/init-data-node';
 
-type Item = { id: string; title: string; tickets: number };
+type Prize = { id: string; title: string; weight: number; type?: string };
 
-const ITEMS: Item[] = [
-  { id: 'L1', title: '1 000 000', tickets: 1 },
-  { id: 'R1', title: '500 000',   tickets: 2 },
-  { id: 'R2', title: '300 000',   tickets: 4 },
-  { id: 'C1', title: '10 000',    tickets: 3000 },
-  { id: 'C2', title: '10 000',    tickets: 3000 },
-  { id: 'C3', title: '10 000',    tickets: 3000 },
-];
-
-function pickByTickets(items: Item[]) {
-  const total = items.reduce((s, it) => s + it.tickets, 0);
-  let r = Math.random() * total;
-  for (const it of items) {
-    if (r < it.tickets) return it;
-    r -= it.tickets;
+async function getRandomPrize(supabase: any): Promise<Prize | null> {
+  try {
+    const { data, error } = await supabase.rpc('get_random_prize');
+    if (error) {
+      console.error('[get_random_prize:error]', error);
+      return null;
+    }
+    return data?.[0] || null;
+  } catch (e) {
+    console.error('[get_random_prize:exception]', e);
+    return null;
   }
-  return items[items.length - 1];
 }
 
 async function readInitData(req: NextRequest): Promise<{ raw: string; hasHeader: boolean }> {
@@ -83,9 +78,17 @@ export async function POST(req: NextRequest) {
     initLen: initDataRaw?.length || 0,
   });
 
+  // Сначала получаем случайный приз
+  const prize = await getRandomPrize(supabase);
+  if (!prize) {
+    console.error('[open_case:no_prize]', 'Failed to get random prize from DB');
+    return NextResponse.json({ ok: false, error: 'prize_failed' }, { status: 500 });
+  }
+
   let ok = true;
   let balance: number | null = null;
 
+  // Только после получения приза списываем попытку
   if (userId !== 'guest') {
     const { data: consumeRows, error: consumeErr } = await supabase.rpc('consume_open', {
       p_user_id: userId,
@@ -110,8 +113,6 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  const prize = pickByTickets(ITEMS);
-
   await supabase.from('open_logs').insert({
     ts, req_id: reqId, user_id: userId,
     prize_id: prize.id, prize_title: prize.title,
@@ -126,7 +127,18 @@ export async function POST(req: NextRequest) {
     ts, reqId, userId, prizeId: prize.id, prizeTitle: prize.title,
   });
 
-  return NextResponse.json({ ok: true, prize, userId, balance, validated: isValid });
+  return NextResponse.json({ 
+    ok: true, 
+    prize: { 
+      id: prize.id, 
+      title: prize.title, 
+      weight: prize.weight,
+      type: prize.type 
+    }, 
+    userId, 
+    balance, 
+    validated: isValid 
+  });
 }
 
 export async function GET(req: NextRequest) {
